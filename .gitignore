@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Runtime output
+output/
+logs/
+data/*.mmdb
+data/meta_ranges.json
+data/*.tmp
