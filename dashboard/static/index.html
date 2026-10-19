@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WhatsApp IP Tracker — Live</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3; --muted:#8b949e;
+          --meta:#3fb950; --remote:#d29922; --peer:#f85149; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:12px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:16px; margin:0; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--peer); display:inline-block; }
+  .dot.on { background:var(--meta); }
+  .stats { margin-left:auto; display:flex; gap:18px; color:var(--muted); font-size:13px; }
+  .stats b { color:var(--fg); }
+  main { display:grid; grid-template-columns:1fr 1fr; gap:14px; padding:14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .panel h2 { font-size:13px; margin:0; padding:9px 12px; border-bottom:1px solid var(--line); color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  #map { width:100%; height:340px; display:block; background:#0a1a2f; }
+  .feed { max-height:340px; overflow:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { position:sticky; top:0; background:var(--panel); color:var(--muted); font-weight:600; font-size:12px; }
+  td.ip { font-family:ui-monospace,Consolas,monospace; }
+  .tag { padding:1px 7px; border-radius:10px; font-size:11px; font-weight:600; }
+  .tag.meta { background:rgba(63,185,80,.15); color:var(--meta); }
+  .tag.remote { background:rgba(210,153,34,.15); color:var(--remote); }
+  .tag.peer { background:rgba(248,81,73,.18); color:var(--peer); }
+  .full { grid-column:1/3; }
+  .empty { padding:20px; color:var(--muted); text-align:center; }
+  #banner { display:none; margin:10px 14px 0; padding:9px 12px; border:1px solid var(--peer); border-radius:8px; color:var(--peer); background:rgba(248,81,73,.1); }
+  .feed { overflow-x:auto; }
+  @media (max-width: 800px) {
+    main { grid-template-columns:1fr; padding:8px; }
+    .full { grid-column:1; }
+    header { flex-wrap:wrap; }
+    .stats { margin-left:0; flex-wrap:wrap; gap:10px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="conn"></span>
+  <h1>WhatsApp IP Tracker</h1>
+  <div class="stats">
+    <span>Flows: <b id="s-flows">0</b></span>
+    <span>Unique IPs: <b id="s-ips">0</b></span>
+    <span>Meta: <b id="s-meta">0</b></span>
+    <span>Candidate peers: <b id="s-peer">0</b></span>
+  </div>
+</header>
+
+<div id="banner"></div>
+<main>
+  <section class="panel">
+    <h2>Geo Map</h2>
+    <canvas id="map" width="900" height="450"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>Live Feed</h2>
+    <div class="feed">
+      <table>
+        <thead><tr><th>Time</th><th>Remote IP</th><th>Proto</th><th>Org</th><th>Country</th><th>Type</th></tr></thead>
+        <tbody id="feed"><tr><td colspan="6" class="empty">Waiting for packets… (capture needs root; make a WhatsApp call from this phone)</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel full">
+    <h2>Ranked Remotes</h2>
+    <div class="feed" style="max-height:260px">
+      <table>
+        <thead><tr><th>Score</th><th>Remote IP</th><th>Packets</th><th>Org (ASN)</th><th>Location</th><th>Host</th><th>Type</th></tr></thead>
+        <tbody id="rank"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const seen = new Map();      // ip -> record
+let flows = 0;
+const canvas = document.getElementById('map'), ctx = canvas.getContext('2d');
+
+function proj(lat, lon) {           // equirectangular
+  return [ (lon + 180) / 360 * canvas.width, (90 - lat) / 180 * canvas.height ];
+}
+function drawMapBase() {
+  ctx.fillStyle = '#0a1a2f'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle = '#16324f'; ctx.lineWidth = 1;
+  for (let x=0; x<=canvas.width; x+=canvas.width/12){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+  for (let y=0; y<=canvas.height; y+=canvas.height/6){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+}
+function redrawPoints() {
+  drawMapBase();
+  for (const r of seen.values()) {
+    if (r.latitude == null || r.longitude == null) continue;
+    const [x,y] = proj(r.latitude, r.longitude);
+    const color = r.candidate_peer ? '#f85149' : (r.is_meta ? '#3fb950' : '#d29922');
+    ctx.beginPath(); ctx.arc(x, y, r.candidate_peer ? 6 : 4, 0, 7);
+    ctx.fillStyle = color; ctx.fill();
+    if (r.candidate_peer) { ctx.strokeStyle = color; ctx.globalAlpha=.4; ctx.beginPath(); ctx.arc(x,y,11,0,7); ctx.stroke(); ctx.globalAlpha=1; }
+  }
+}
+function typeTag(r){
+  if (r.candidate_peer) return '<span class="tag peer">PEER?</span>';
+  if (r.is_meta) return '<span class="tag meta">Meta</span>';
+  return '<span class="tag remote">Remote</span>';
+}
+function fmt(ts){ return (ts||'').substring(11,19); }
+// Reverse-DNS names and org strings come from the network: never inject them as HTML.
+function esc(v){
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function addFeedRow(r){
+  const tb = document.getElementById('feed');
+  if (tb.querySelector('.empty')) tb.innerHTML = '';
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${esc(fmt(r.ts))}</td><td class="ip">${esc(r.remote)}</td><td>${esc(r.proto)}</td>
+    <td>${esc(r.org)}</td><td>${esc(r.country)}</td><td>${typeTag(r)}</td>`;
+  tb.prepend(tr);
+  while (tb.children.length > 200) tb.removeChild(tb.lastChild);
+}
+function renderRank(){
+  const rows = [...seen.values()].sort((a,b)=>b._score-a._score).slice(0,50);
+  document.getElementById('rank').innerHTML = rows.map(r=>`<tr>
+    <td>${esc(r._score)}</td><td class="ip">${esc(r.remote)}</td><td>${esc(r._packets)}</td>
+    <td>${esc(r.org)} ${r.asn?esc('(AS'+r.asn+')'):''}</td>
+    <td>${esc([r.city,r.country].filter(Boolean).join(', '))}</td>
+    <td>${esc(r.host)}</td><td>${typeTag(r)}</td></tr>`).join('');
+}
+function stats(){
+  let meta=0, peer=0;
+  for (const r of seen.values()){ if(r.is_meta) meta++; if(r.candidate_peer) peer++; }
+  document.getElementById('s-flows').textContent = flows;
+  document.getElementById('s-ips').textContent = seen.size;
+  document.getElementById('s-meta').textContent = meta;
+  document.getElementById('s-peer').textContent = peer;
+}
+
+function onRecord(r){
+  flows++;
+  const prev = seen.get(r.remote);
+  r._packets = (prev?._packets || 0) + 1;
+  r._score = Math.max(prev?._score || 0, r.score);
+  seen.set(r.remote, r);
+  addFeedRow(r); renderRank(); stats(); redrawPoints();
+}
+
+function connect(){
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  const conn = document.getElementById('conn');
+  ws.onopen = ()=> conn.classList.add('on');
+  ws.onclose = ()=>{ conn.classList.remove('on'); setTimeout(connect, 2000); };
+  ws.onmessage = e => onRecord(JSON.parse(e.data));
+}
+async function pollStatus(){
+  try {
+    const st = await (await fetch('/api/status')).json();
+    const b = document.getElementById('banner');
+    if (st.error) { b.style.display='block'; b.textContent = st.error; }
+    else if (!st.running) { b.style.display='block'; b.textContent = 'Capture is not running (finished or stopped).'; }
+    else { b.style.display='none'; }
+  } catch (e) { /* server restarting */ }
+}
+drawMapBase(); connect(); pollStatus(); setInterval(pollStatus, 5000);
+</script>
+</body>
+</html>

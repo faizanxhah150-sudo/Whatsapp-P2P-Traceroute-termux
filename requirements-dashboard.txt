@@ -1,0 +1,5 @@
+# Optional live dashboard. Starlette instead of FastAPI: no pydantic-core (Rust).
+# Plain `uvicorn` (NOT `uvicorn[standard]`): no uvloop / httptools / watchfiles.
+starlette>=0.37,<2
+uvicorn>=0.29,<1
+websockets>=12,<16

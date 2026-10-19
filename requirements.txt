@@ -1,0 +1,6 @@
+# Core runtime (pure Python - installs on Termux without a compiler).
+# Dashboard dependencies live in requirements-dashboard.txt.
+scapy>=2.5,<3
+requests>=2.31,<3
+python-dotenv>=1.0,<2
+maxminddb>=2.2,<4

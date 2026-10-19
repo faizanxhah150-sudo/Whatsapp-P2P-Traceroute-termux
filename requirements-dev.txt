@@ -1,0 +1,4 @@
+-r requirements.txt
+-r requirements-dashboard.txt
+pytest>=8.0,<10
+ruff>=0.5
